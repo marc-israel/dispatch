@@ -65,7 +65,6 @@ test("mounts correctly and starts verification automatically", async () => {
     action: "test-action",
   })
 })
-
 test("shows loading state while verifying", async () => {
   vi.mocked(authApi.verifyMfa).mockImplementationOnce(
     () => new Promise(() => {}) // Never resolving promise
@@ -128,7 +127,6 @@ test("shows error message and retry button on denial", async () => {
   expect(retryButton.exists()).toBe(true)
   expect(retryButton.text()).toContain("Retry Verification")
 })
-
 test("retry button triggers new verification attempt", async () => {
   const verifyMfaMock = vi
     .mocked(authApi.verifyMfa)
