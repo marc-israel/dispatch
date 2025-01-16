@@ -1,4 +1,4 @@
-FROM python:3.11.10-slim-bullseye as sdist
+FROM python:3.11.10-slim-bullseye AS sdist
 
 LABEL maintainer="oss@netflix.com"
 LABEL org.opencontainers.image.title="Dispatch PyPI Wheel"
@@ -90,30 +90,28 @@ RUN echo "deb http://apt.postgresql.org/pub/repos/apt bullseye-pgdg main" > /etc
 RUN wget --quiet -O - https://deb.nodesource.com/setup_20.x | bash -
 
 COPY --from=sdist /dist/*.whl /tmp/dist/
-RUN buildDeps="" \
+RUN set -ex \
+  && buildDeps="gcc g++ python3-dev libffi-dev libssl-dev make" \
   && apt-get update \
-  && apt-get install -y --no-install-recommends "$buildDeps" \
+  && apt-get install -y --no-install-recommends $buildDeps \
+  # Set BLIS architecture to generic for ARM compatibility
+  && export BLIS_ARCH=generic \
+  && export BLIS_COMPILER=gcc \
   # remove internal index when internal plugins are separated
   && pip install -U /tmp/dist/*.whl \
-  && apt-get purge -y --auto-remove "$buildDeps" \
+  && apt-get purge -y --auto-remove $buildDeps \
   # We install run-time dependencies strictly after
   # build dependencies to prevent accidental collusion.
-  # These are also installed last as they are needed
-  # during container run and can have the same deps w/
+  && apt-get update \
   && apt-get install -y --no-install-recommends \
-  pkg-config postgresql-client-14 nodejs \
+  pkg-config \
+  postgresql-client-14 \
+  nodejs \
+  npm \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* \
-  # mjml has to be installed differently here because
-  # after node 14, docker will install npm files at the
-  # root directoy and fail, so we have to create a new
-  # directory and use it for the install then copy the
-  # files to the root directory to maintain backwards
-  # compatibility for email generation
+  # mjml installation
   && mkdir -p /mjml_install \
-  # if our workdir is /, then pushd/popd doesn't work
-  # for the npm install. It still tries to install in /,
-  # which npm can't do
   && cd /mjml_install \
   && npm install --no-cache-dir mjml \
   && mv node_modules / \
