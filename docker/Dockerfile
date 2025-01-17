@@ -10,11 +10,17 @@ LABEL org.opencontainers.image.authors="oss@netflix.com"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-o", "errexit", "-c"]
 
+# Set BLIS environment variables for ARM compatibility
+ENV BLIS_ARCH="generic"
+ENV BLIS_COMPILER="gcc"
+ENV BLIS_ENABLE_CBLAS="1"
+
 # Get and set up Node for front-end asset building
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  # Needed for fetching stuff
   ca-certificates \
   wget \
+  gcc g++ python3-dev libffi-dev libssl-dev make \
+  libblas-dev liblapack-dev \
   && rm -rf /var/lib/apt/lists/*
 
 RUN wget --quiet -O - https://deb.nodesource.com/setup_20.x | bash - \
@@ -28,25 +34,6 @@ LABEL org.opencontainers.image.licenses="https://github.com/netflix/dispatch/blo
 ARG DISPATCH_LIGHT_BUILD
 ENV DISPATCH_LIGHT_BUILD=${DISPATCH_LIGHT_BUILD}
 
-RUN echo "DISPATCH_LIGHT_BUILD=${DISPATCH_LIGHT_BUILD}"
-
-# Allow build time variables via --build-arg
-ARG VITE_DISPATCH_AUTH_REGISTRATION_ENABLED
-ARG VITE_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_CLIENT_ID
-ARG VITE_DISPATCH_AUTHENTICATION_PROVIDER_PKCE_OPEN_ID_CONNECT_URL
-ARG VITE_DISPATCH_AUTHENTICATION_PROVIDER_SLUG
-ARG VITE_DISPATCH_AUTHENTICATION_PROVIDER_USE_ID_TOKEN
-ARG VITE_SENTRY_DSN
-ARG VITE_SENTRY_APP_KEY
-ARG VITE_SENTRY_ENABLED
-
-# Should be replaced in your build process script
-ARG VITE_DISPATCH_COMMIT_HASH
-ENV VITE_DISPATCH_COMMIT_HASH="Unknown"
-
-ARG VITE_DISPATCH_COMMIT_MESSAGE
-ENV VITE_DISPATCH_COMMIT_MESSAGE="Unknown"
-
 COPY . /usr/src/dispatch/
 RUN YARN_CACHE_FOLDER="$(mktemp -d)" \
   && export YARN_CACHE_FOLDER \
@@ -55,7 +42,6 @@ RUN YARN_CACHE_FOLDER="$(mktemp -d)" \
   && rm -r "$YARN_CACHE_FOLDER" \
   && mv /usr/src/dispatch/dist /dist
 
-# This is the image to be run
 FROM python:3.11.10-slim-bullseye
 
 LABEL maintainer="oss@dispatch.io"
@@ -69,19 +55,27 @@ LABEL org.opencontainers.image.authors="oss@netflix.com"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-o", "errexit", "-c"]
 
-# add our user and group first to make sure their IDs get assigned consistently
 RUN groupadd -r dispatch && useradd -r -m -g dispatch dispatch
 
-# Sane defaults for pip
 ENV PIP_NO_CACHE_DIR=off \
   PIP_DISABLE_PIP_VERSION_CHECK=1 \
-  # Dispatch config params
-  DISPATCH_CONF=/etc/dispatch
+  DISPATCH_CONF=/etc/dispatch \
+  BLIS_ARCH="generic" \
+  BLIS_COMPILER="gcc" \
+  BLIS_ENABLE_CBLAS="1"
 
+# Install base dependencies including gcc and development libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  # Needed for fetching stuff
   ca-certificates \
-  wget gnupg \
+  wget \
+  gnupg \
+  gcc g++ \
+  python3-dev \
+  libffi-dev \
+  libssl-dev \
+  make \
+  libblas-dev \
+  liblapack-dev \
   && rm -rf /var/lib/apt/lists/*
 
 RUN echo "deb http://apt.postgresql.org/pub/repos/apt bullseye-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
@@ -90,27 +84,14 @@ RUN echo "deb http://apt.postgresql.org/pub/repos/apt bullseye-pgdg main" > /etc
 RUN wget --quiet -O - https://deb.nodesource.com/setup_20.x | bash -
 
 COPY --from=sdist /dist/*.whl /tmp/dist/
-RUN set -ex \
-  && buildDeps="gcc g++ python3-dev libffi-dev libssl-dev make" \
+RUN buildDeps="" \
   && apt-get update \
-  && apt-get install -y --no-install-recommends $buildDeps \
-  # Set BLIS architecture to generic for ARM compatibility
-  && export BLIS_ARCH=generic \
-  && export BLIS_COMPILER=gcc \
-  # remove internal index when internal plugins are separated
-  && pip install -U /tmp/dist/*.whl \
-  && apt-get purge -y --auto-remove $buildDeps \
-  # We install run-time dependencies strictly after
-  # build dependencies to prevent accidental collusion.
-  && apt-get update \
+  && apt-get install -y --no-install-recommends "$buildDeps" \
   && apt-get install -y --no-install-recommends \
-  pkg-config \
-  postgresql-client-14 \
-  nodejs \
-  npm \
+  pkg-config postgresql-client-14 nodejs \
+  && pip install -U /tmp/dist/*.whl \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* \
-  # mjml installation
   && mkdir -p /mjml_install \
   && cd /mjml_install \
   && npm install --no-cache-dir mjml \
@@ -123,7 +104,3 @@ VOLUME /var/lib/dispatch/files
 
 ENTRYPOINT ["dispatch"]
 CMD ["server", "start", "dispatch.main:app", "--host=0.0.0.0"]
-
-ARG SOURCE_COMMIT
-LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
-LABEL org.opencontainers.image.licenses="https://github.com/netflix/dispatch/blob/${SOURCE_COMMIT:-main}/LICENSE"
