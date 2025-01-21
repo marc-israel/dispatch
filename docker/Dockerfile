@@ -1,95 +1,127 @@
-FROM python:3.11.10-slim-bullseye AS sdist
+# Build stage
+FROM --platform=$BUILDPLATFORM python:3.11.10-slim-bullseye AS builder
 
-LABEL maintainer="oss@netflix.com"
-LABEL org.opencontainers.image.title="Dispatch PyPI Wheel"
-LABEL org.opencontainers.image.description="PyPI Wheel Builder for Dispatch"
-LABEL org.opencontainers.image.url="https://dispatch.io/"
-LABEL org.opencontainers.image.source="https://github.com/netflix/dispatch"
-LABEL org.opencontainers.image.vendor="Netflix, Inc."
-LABEL org.opencontainers.image.authors="oss@netflix.com"
+WORKDIR /build
 
-SHELL ["/bin/bash", "-o", "pipefail", "-o", "errexit", "-c"]
-
-# Set BLIS environment variables for ARM compatibility
-ENV BLIS_ARCH="generic"
-ENV BLIS_COMPILER="gcc"
-ENV BLIS_ENABLE_CBLAS="1"
-
-# Get and set up Node for front-end asset building
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  ca-certificates \
-  wget \
-  gcc g++ python3-dev libffi-dev libssl-dev make \
-  libblas-dev liblapack-dev \
+  build-essential \
+  curl \
+  git \
+  libffi-dev \
+  libpq-dev \
+  python3-dev \
   && rm -rf /var/lib/apt/lists/*
 
-RUN wget --quiet -O - https://deb.nodesource.com/setup_20.x | bash - \
-  && apt-get install -y nodejs --no-install-recommends
+# Install Node.js for ARM64
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+  && apt-get install -y nodejs \
+  && npm install -g yarn
 
-ARG SOURCE_COMMIT
-ENV DISPATCH_BUILD=${SOURCE_COMMIT:-unknown}
-LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
-LABEL org.opencontainers.image.licenses="https://github.com/netflix/dispatch/blob/${SOURCE_COMMIT:-main}/LICENSE"
+# Copy application code
+COPY . .
 
-ARG DISPATCH_LIGHT_BUILD
-ENV DISPATCH_LIGHT_BUILD=${DISPATCH_LIGHT_BUILD}
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+  wheel \
+  setuptools \
+  "pydantic<2.0" \
+  "fastapi<0.100.0" \
+  sqlalchemy \
+  sqlalchemy-utils \
+  alembic \
+  psycopg2-binary \
+  bcrypt \
+  python-slugify \
+  python-jose[cryptography] \
+  python-multipart \
+  email-validator \
+  markdown \
+  setuptools_scm
 
-COPY . /usr/src/dispatch/
-RUN YARN_CACHE_FOLDER="$(mktemp -d)" \
-  && export YARN_CACHE_FOLDER \
-  && pushd /usr/src/dispatch \
-  && python setup.py bdist_wheel \
-  && rm -r "$YARN_CACHE_FOLDER" \
-  && mv /usr/src/dispatch/dist /dist
+# Set up frontend build environment
+WORKDIR /build/src/dispatch/static/dispatch
 
-FROM python:3.11.10-slim-bullseye
+# Create .npmrc to skip optional dependencies
+RUN echo "optional=false" > .npmrc \
+  && echo "FORMKIT_ENTERPRISE_TOKEN=none" > .env
 
-LABEL maintainer="oss@dispatch.io"
-LABEL org.opencontainers.image.title="Dispatch"
-LABEL org.opencontainers.image.description="Dispatch runtime image"
-LABEL org.opencontainers.image.url="https://github.com/netflix/dispatch"
-LABEL org.opencontainers.image.documentation="https://github.com/netflix/dispatch"
-LABEL org.opencontainers.image.source="https://github.com/netflix/dispatch"
-LABEL org.opencontainers.image.vendor="Netflix, Inc."
-LABEL org.opencontainers.image.authors="oss@netflix.com"
+# Clean any existing node_modules
+RUN rm -rf node_modules package-lock.json
 
-SHELL ["/bin/bash", "-o", "pipefail", "-o", "errexit", "-c"]
+# Install frontend dependencies
+RUN npm install \
+  && npm install -D vite@latest \
+  && npm install -D @vitejs/plugin-vue@latest \
+  && npm install -D rollup@latest \
+  && npm install -D @vue/compiler-sfc \
+  && npm install -D sass
 
-RUN groupadd -r dispatch && useradd -r -m -g dispatch dispatch
+# Ensure vite is in PATH and set NODE_ENV
+ENV PATH="/build/src/dispatch/static/dispatch/node_modules/.bin:${PATH}" \
+  NODE_ENV=production
 
-ENV PIP_NO_CACHE_DIR=off \
-  PIP_DISABLE_PIP_VERSION_CHECK=1 \
-  DISPATCH_CONF=/etc/dispatch \
-  BLIS_ARCH="generic" \
-  BLIS_COMPILER="gcc" \
-  BLIS_ENABLE_CBLAS="1"
+# Build frontend assets
+RUN npm run build
 
-# Install base dependencies including gcc and development libraries
+# Build wheel
+WORKDIR /build
+RUN echo "0.1.0" > VERSION \
+  && SETUPTOOLS_SCM_PRETEND_VERSION="0.1.0" \
+  FORMKIT_ENTERPRISE_TOKEN=none \
+  python setup.py bdist_wheel
+
+# Runtime stage
+FROM --platform=$BUILDPLATFORM python:3.11.10-slim-bullseye
+
+WORKDIR /app
+
+# Install runtime dependencies including build essentials
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  ca-certificates \
-  wget \
+  curl \
   gnupg \
-  gcc g++ \
-  python3-dev \
+  libpq5 \
+  gcc \
+  build-essential \
   libffi-dev \
   libssl-dev \
-  make \
-  libblas-dev \
-  liblapack-dev \
+  python3-dev \
+  pkg-config \
+  && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add - \
+  && echo "deb http://apt.postgresql.org/pub/repos/apt bullseye-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends \
+  postgresql-client-14 \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd -r dispatch \
+  && useradd -r -g dispatch -d /app dispatch \
+  && chown -R dispatch:dispatch /app
+
+# Install Node.js (needed for runtime)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+  && apt-get install -y nodejs \
+  && npm install -g mjml \
   && rm -rf /var/lib/apt/lists/*
 
-RUN echo "deb http://apt.postgresql.org/pub/repos/apt bullseye-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
-  && wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
-
-RUN wget --quiet -O - https://deb.nodesource.com/setup_20.x | bash -
-
-COPY --from=sdist /dist/*.whl /tmp/dist/
-RUN buildDeps="" \
+# Copy wheel from builder and install
+COPY --from=builder /build/dist/*.whl /tmp/dist/
+RUN buildDeps="gcc build-essential libffi-dev libssl-dev python3-dev pkg-config" \
   && apt-get update \
-  && apt-get install -y --no-install-recommends "$buildDeps" \
+  && apt-get install -y --no-install-recommends $buildDeps \
   && apt-get install -y --no-install-recommends \
-  pkg-config postgresql-client-14 nodejs \
+  gcc \
+  build-essential \
+  libffi-dev \
+  libssl-dev \
+  python3-dev \
+  pkg-config \
+  # remove internal index when internal plugins are separated
   && pip install -U /tmp/dist/*.whl \
+  && apt-get purge -y --auto-remove "$buildDeps" \
+  && apt-get install -y --no-install-recommends \
+  pkg-config \
+  postgresql-client-14 \
+  nodejs \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /mjml_install \
@@ -98,6 +130,13 @@ RUN buildDeps="" \
   && mv node_modules / \
   && cd / \
   && rm -rf /mjml_install
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+  DISPATCH_CONF=/etc/dispatch \
+  NODE_OPTIONS="--max-old-space-size=4096"
+
+USER dispatch
 
 EXPOSE 8000
 VOLUME /var/lib/dispatch/files
