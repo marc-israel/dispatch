@@ -14,33 +14,40 @@
     </v-row>
     <v-row>
       <!-- Widgets Start -->
-      <v-col cols="12" sm="6" lg="3">
+      <v-col cols="12" sm="6" lg="4">
         <stat-widget icon="mdi-domain" :title="toNumberString(totalCases)" sup-title="Cases" />
       </v-col>
-      <v-col cols="12" sm="6" lg="3">
+      <v-col cols="12" sm="6" lg="4">
         <stat-widget
           icon="mdi-domain"
           :title="toNumberString(totalCasesTriaged)"
           sup-title="Cases Triaged"
         />
       </v-col>
-      <v-col cols="12" sm="6" lg="3">
+      <v-col cols="12" sm="6" lg="4">
         <stat-widget
           icon="mdi-domain"
           :title="toNumberString(totalCasesEscalated)"
           sup-title="Cases Escalated"
         />
       </v-col>
-      <v-col cols="12" sm="6" lg="3">
+      <v-col cols="12" sm="6" lg="6">
         <stat-widget
           icon="mdi-clock"
           :title="toNumberString(totalHours)"
           sup-title="Total Hours (New to Closed)"
         />
       </v-col>
+      <v-col cols="12" sm="6" lg="6">
+        <stat-widget
+          icon="mdi-currency-usd"
+          :title="toUSD(totalCasesCost)"
+          sup-title="Total Cases Cost"
+        />
+      </v-col>
       <!-- Widgets Ends -->
       <!-- Statistics Start -->
-      <v-col cols="12" sm="6">
+      <v-col cols="12">
         <case-type-bar-chart-card
           v-model="groupedItems"
           :loading="loading"
@@ -49,6 +56,13 @@
       </v-col>
       <v-col cols="12" sm="6">
         <case-severity-bar-chart-card
+          v-model="groupedItems"
+          :loading="loading"
+          @details-selected="detailsSelected($event)"
+        />
+      </v-col>
+      <v-col cols="12" sm="6">
+        <case-priority-bar-chart-card
           v-model="groupedItems"
           :loading="loading"
           @details-selected="detailsSelected($event)"
@@ -66,6 +80,9 @@
       <v-col cols="12" sm="6">
         <case-new-closed-average-time-card v-model="groupedItems" :loading="loading" />
       </v-col>
+      <v-col cols="12">
+        <case-cost-bar-chart-card v-model="groupedItems" :loading="loading" />
+      </v-col>
       <!-- Statistics Ends -->
     </v-row>
   </v-container>
@@ -74,15 +91,17 @@
 <script>
 import { groupBy, sumBy } from "lodash"
 import { mapFields } from "vuex-map-fields"
-import { toNumberString } from "@/filters"
+import { toNumberString, toUSD } from "@/filters"
 
 import differenceInHours from "date-fns/differenceInHours"
 import parseISO from "date-fns/parseISO"
 
+import CaseCostBarChartCard from "@/dashboard/case/CaseCostBarChartCard.vue"
 import CaseDialogFilter from "@/dashboard/case/CaseDialogFilter.vue"
 import CaseEscalatedClosedAverageTimeCard from "@/dashboard/case/CaseEscalatedClosedAverageTimeCard.vue"
 import CaseNewClosedAverageTimeCard from "@/dashboard/case/CaseNewClosedAverageTimeCard.vue"
 import CaseNewTriageAverageTimeCard from "@/dashboard/case/CaseNewTriageAverageTimeCard.vue"
+import CasePriorityBarChartCard from "@/dashboard/case/CasePriorityBarChartCard.vue"
 import CaseSeverityBarChartCard from "@/dashboard/case/CaseSeverityBarChartCard.vue"
 import CaseTriageEscalatedAverageTimeCard from "@/dashboard/case/CaseTriageEscalatedAverageTimeCard.vue"
 import CaseTypeBarChartCard from "@/dashboard/case/CaseTypeBarChartCard.vue"
@@ -92,10 +111,12 @@ export default {
   name: "CaseDashboard",
 
   components: {
+    CaseCostBarChartCard,
     CaseDialogFilter,
     CaseEscalatedClosedAverageTimeCard,
     CaseNewClosedAverageTimeCard,
     CaseNewTriageAverageTimeCard,
+    CasePriorityBarChartCard,
     CaseSeverityBarChartCard,
     CaseTriageEscalatedAverageTimeCard,
     CaseTypeBarChartCard,
@@ -113,7 +134,7 @@ export default {
   },
 
   setup() {
-    return { toNumberString }
+    return { toNumberString, toUSD }
   },
 
   methods: {
@@ -218,6 +239,13 @@ export default {
         }
         return differenceInHours(parseISO(endTime), parseISO(item.reported_at))
       })
+    },
+    totalCasesCost() {
+      let total_cost = sumBy(this.items, "total_cost")
+      return total_cost ? total_cost : 0
+    },
+    averageCaseCost() {
+      return this.totalCasesCost / this.totalCases
     },
     defaultUserProjects: {
       get() {
