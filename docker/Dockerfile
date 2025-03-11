@@ -1,5 +1,5 @@
 # Build stage
-FROM --platform=$BUILDPLATFORM python:3.11.10-slim-bullseye AS builder
+FROM --platform=linux/arm64 python:3.11.10-slim-bullseye AS builder
 
 WORKDIR /build
 
@@ -11,12 +11,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   libffi-dev \
   libpq-dev \
   python3-dev \
+  pkg-config \
+  libssl-dev \
   && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js for ARM64
+# Install Node.js specifically for ARM64
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
   && apt-get install -y nodejs \
-  && npm install -g yarn
+  && npm install -g yarn \
+  && npm config set registry https://registry.npmjs.org/
 
 # Copy application code
 COPY . .
@@ -37,7 +40,8 @@ RUN pip install --no-cache-dir \
   python-multipart \
   email-validator \
   markdown \
-  setuptools_scm
+  setuptools_scm \
+  uvicorn
 
 # Set up frontend build environment
 WORKDIR /build/src/dispatch/static/dispatch
@@ -49,30 +53,39 @@ RUN echo "optional=false" > .npmrc \
 # Clean any existing node_modules
 RUN rm -rf node_modules package-lock.json
 
+# Update axios version to be compatible with @vueuse/integrations
+RUN npm install axios@^1.0.0 --save --legacy-peer-deps
+
 # Install frontend dependencies
-RUN npm install \
-  && npm install -D vite@latest \
-  && npm install -D @vitejs/plugin-vue@latest \
-  && npm install -D rollup@latest \
-  && npm install -D @vue/compiler-sfc \
-  && npm install -D sass
+ARG NPM_FLAGS=""
+RUN npm install ${NPM_FLAGS} \
+  && npm install -D vite@5.0.0 ${NPM_FLAGS} \
+  && npm install -D @vitejs/plugin-vue@5.0.0 ${NPM_FLAGS} \
+  && npm install -D vite-plugin-vuetify@^2.0.1 ${NPM_FLAGS} \
+  && npm install -D rollup@4.9.0 ${NPM_FLAGS} \
+  && npm install -D @vue/compiler-sfc ${NPM_FLAGS} \
+  && npm install -D sass ${NPM_FLAGS}
 
 # Ensure vite is in PATH and set NODE_ENV
 ENV PATH="/build/src/dispatch/static/dispatch/node_modules/.bin:${PATH}" \
-  NODE_ENV=production
+  NODE_ENV=production \
+  ROLLUP_SKIP_NATIVES=true \
+  VITE_CJS_IGNORE_WARNING=true
 
 # Build frontend assets
-RUN npm run build
+RUN NODE_OPTIONS=--max_old_space_size=4096 npm run build
 
 # Build wheel
 WORKDIR /build
 RUN echo "0.1.0" > VERSION \
   && SETUPTOOLS_SCM_PRETEND_VERSION="0.1.0" \
-  FORMKIT_ENTERPRISE_TOKEN=none \
+  && sed -i 's/\["npm", "install"\]/\["npm", "install", "--legacy-peer-deps"\]/' setup.py \
+  && sed -i 's/\["npm", "run", "build"\]/\["npm", "run", "build", "--force"\]/' setup.py \
+  && FORMKIT_ENTERPRISE_TOKEN=none \
   python setup.py bdist_wheel
 
 # Runtime stage
-FROM --platform=$BUILDPLATFORM python:3.11.10-slim-bullseye
+FROM --platform=linux/arm64 python:3.11.10-slim-bullseye
 
 WORKDIR /app
 
@@ -104,32 +117,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
   && rm -rf /var/lib/apt/lists/*
 
 # Copy wheel from builder and install
-COPY --from=builder /build/dist/*.whl /tmp/dist/
-RUN buildDeps="gcc build-essential libffi-dev libssl-dev python3-dev pkg-config" \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends $buildDeps \
-  && apt-get install -y --no-install-recommends \
-  gcc \
-  build-essential \
-  libffi-dev \
-  libssl-dev \
-  python3-dev \
-  pkg-config \
-  # remove internal index when internal plugins are separated
-  && pip install -U /tmp/dist/*.whl \
-  && apt-get purge -y --auto-remove "$buildDeps" \
-  && apt-get install -y --no-install-recommends \
-  pkg-config \
-  postgresql-client-14 \
-  nodejs \
-  && apt-get clean \
-  && rm -rf /var/lib/apt/lists/* \
-  && mkdir -p /mjml_install \
-  && cd /mjml_install \
-  && npm install --no-cache-dir mjml \
-  && mv node_modules / \
-  && cd / \
-  && rm -rf /mjml_install
+COPY --from=builder /build/dist/*.whl /tmp/
+RUN pip install --no-cache-dir /tmp/*.whl && rm -rf /tmp/*.whl
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \

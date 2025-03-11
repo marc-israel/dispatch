@@ -23,7 +23,7 @@
     "lint": "eslint src --ext .js,.vue",
     "lint:fix": "eslint src --ext .js,.vue --fix",
     "preview": "vite preview --open --port 8080",
-    "serve": "cross-env NODE_ENV=dev NODE_OPTIONS='--max-http-header-size=100000' vite",
+    "serve": "cross-env NODE_ENV=dev NODE_OPTIONS='--max-http-header-size=100000' vite --force",
     "test": "vitest --dom",
     "preinstall": "node preinstall.js"
   },
@@ -82,7 +82,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.40.0",
-    "@vitejs/plugin-vue": "^5.0.3",
+    "@vitejs/plugin-vue": "^5.0.0",
     "@vue/test-utils": "^2.4.3",
     "babel-runtime": "^6.26.0",
     "cross-env": "^7.0.3",
@@ -103,6 +103,13 @@
     "vite": "^5.0.11",
     "vite-plugin-monaco-editor": "^1.1.0",
     "vite-plugin-vuetify": "^2.0.1",
-    "vitest": "^0.34.6"
+    "vitest": "^0.34.6",
+    "rollup": "^2.79.1"
+  },
+  "overrides": {
+    "vite": "^5.0.0",
+    "rollup": "^2.79.1",
+    "@vitejs/plugin-vue": "^5.0.0",
+    "vite-plugin-vuetify": "^2.0.1"
   }
 }
